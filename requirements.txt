@@ -3,3 +3,4 @@ openpyxl
 streamlit
 requests
 beautifulsoup4
+altair<5
