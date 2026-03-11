@@ -6,10 +6,10 @@ import re
 import unicodedata
 
 st.set_page_config(page_title="医薬品供給状況 自動照合システム", layout="wide")
-st.title("💊 医薬品供給状況 自動照合システム (完全並び替え版)")
-st.write("ファイルをアップロードすると、一番左側に供給状況・再開見込みを配置し、**「供給停止(赤) → 出荷調整(黄) → 通常」の順に自動で並び替えて**表示します。")
+st.title("💊 医薬品供給状況 自動照合システム (最新版・全自動)")
+st.write("ファイルをアップロードすると、**厚労省の最新データ**を自動取得し、危険な順に並び替えて表示します。")
 
-# 1. 厚労省のサイトから最新ExcelのURLを探す
+# 1. 厚労省のサイトから最新ExcelのURLを自動で探す
 @st.cache_data(ttl=3600)
 def get_latest_mhlw_url():
     url_page = "https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/kenkou_iryou/iryou/kouhatu-iyaku/04_00003.html"
@@ -92,42 +92,52 @@ if latest_url:
                     user_df['検索用'] = user_df[u_key].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                     mhlw_df['照合用'] = mhlw_df[m_key].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                     
-                    # ユーザーが指定した「左に持ってくる3つの列」をキーワードで探す
                     col_status = next((c for c in mhlw_df.columns if '出荷対応' in c or '状況' in c), None)
                     col_resolve = next((c for c in mhlw_df.columns if '解消見込み' in c or '消尽' in c), None)
                     col_improve = next((c for c in mhlw_df.columns if '改善' in c or '増加' in c), None)
                     
-                    # 厚労省から引っ張ってくる列のリスト
                     m_cols_to_bring = ['照合用']
                     for col in [col_status, col_resolve, col_improve]:
                         if col and col not in m_cols_to_bring:
                             m_cols_to_bring.append(col)
                             
-                    # 合体！
                     res = pd.merge(user_df, mhlw_df[m_cols_to_bring], left_on='検索用', right_on='照合用', how='left')
                     res = res.drop(columns=['検索用', '照合用'], errors='ignore')
                     
-                    # --- 【大進化】並び替え（ソート）の処理 ---
-                    # 状況に合わせてスコアを付け、ヤバい順に並び替える
+                    # --- 危険度順ソート（赤→黄→白） ---
                     def get_sort_score(status_val):
                         s = str(status_val)
-                        if '停止' in s: return 1 # 一番上
-                        if '限定' in s or '調整' in s: return 2 # 二番目
-                        if s == 'nan' or s == '': return 4 # 該当なしは一番下
-                        return 3 # 通常出荷などは三番目
+                        if '停止' in s: return 1
+                        if '限定' in s or '調整' in s: return 2
+                        if s == 'nan' or s == '': return 4
+                        return 3
                         
                     if col_status in res.columns:
                         res['sort_score'] = res[col_status].apply(get_sort_score)
                         res = res.sort_values(by='sort_score').drop(columns=['sort_score']).reset_index(drop=True)
                     
-                    # --- 【大進化】列の順番を入れ替える ---
+                    # --- 【大進化】列の順番を「見やすい神配列」にする ---
                     front_cols = []
-                    for c in [col_status, col_resolve, col_improve]:
-                        if c and c in res.columns:
-                            front_cols.append(c)
+                    
+                    # 1列目：供給状況（厚労省）
+                    if col_status in res.columns: front_cols.append(col_status)
+                    
+                    # 2列目：薬剤名称（あなたのCSVから）
+                    u_name_col = next((c for c in user_df.columns if '名称' in c or '品名' in c), None)
+                    if u_name_col in res.columns: front_cols.append(u_name_col)
+                    
+                    # 3列目：商品コード（あなたのCSVから）
+                    u_code_col = next((c for c in user_df.columns if 'コード' in c), None)
+                    if u_code_col in res.columns and u_code_col not in front_cols: front_cols.append(u_code_col)
+                    
+                    # 4列目：解消見込み時期（厚労省：ご要望の列！）
+                    if col_resolve in res.columns: front_cols.append(col_resolve)
+                    
+                    # 5列目：改善見込み時期（厚労省）
+                    if col_improve in res.columns: front_cols.append(col_improve)
                             
+                    # 残りの列をその後ろに並べる
                     other_cols = [c for c in res.columns if c not in front_cols]
-                    # 指定された3列を左に、残りを右に配置
                     res = res[front_cols + other_cols]
                     
                     # 色付けルール
@@ -135,7 +145,7 @@ if latest_url:
                         status = str(row.get(col_status, ''))
                         if '停止' in status: return ['background-color: #ffadad'] * len(row) # 赤
                         if '限定' in status or '調整' in status: return ['background-color: #ffd6a5'] * len(row) # 黄
-                        return [''] * len(row) # 通常は無色
+                        return [''] * len(row)
 
                     st.dataframe(res.style.apply(color_rule, axis=1), height=600)
                     st.download_button("この結果を保存する", data=res.to_csv(index=False).encode('utf-8-sig'), file_name="supply_check_result.csv")
