@@ -33,10 +33,10 @@ if latest_url:
 
     if uploaded_file:
         try:
-            # 【修正ポイント】シートの名前ではなく「一番左のシート(0)」を強制的に開く
+            # シートの名前ではなく「一番左のシート(0)」を強制的に開く
             mhlw_df = pd.read_excel(latest_url, sheet_name=0, header=2)
             
-            # JANコードを文字に揃える（数字のズレによるエラー防止）
+            # JANコードを文字に揃える
             if 'JANコード' in mhlw_df.columns:
                 mhlw_df['JANコード'] = mhlw_df['JANコード'].astype(str).str.replace('.0', '', regex=False)
             
@@ -47,11 +47,30 @@ if latest_url:
             if 'JANコード' in user_df.columns:
                 user_df['JANコード'] = user_df['JANコード'].astype(str).str.replace('.0', '', regex=False)
 
-                # 厚労省データから持ってくる列（もし厚労省が列を消していてもエラーにならないようにする）
+                # 厚労省データから持ってくる列
                 target_cols = ['JANコード', '供給状況', '出荷再開予定時期', '備考']
                 available_cols = [c for c in target_cols if c in mhlw_df.columns]
                 
                 # 合体（VLOOKUP）
                 res = pd.merge(user_df, mhlw_df[available_cols], on='JANコード', how='left')
 
-                # 色塗
+                # 色塗りのルール
+                def color_rule(row):
+                    status = str(row.get('供給状況', ''))
+                    if '供給停止' in status: return ['background-color: #ffadad'] * len(row) # 赤
+                    if '限定出荷' in status or '出荷調整' in status: return ['background-color: #ffd6a5'] * len(row) # 黄
+                    return [''] * len(row)
+
+                # 結果表示
+                st.subheader("📊 照合完了！結果を確認してください")
+                st.dataframe(res.style.apply(color_rule, axis=1), height=500)
+                
+                # ダウンロード
+                st.download_button("結果を保存する", data=res.to_csv(index=False).encode('utf_8_sig'), file_name="check_result.csv")
+            else:
+                st.error("⚠️ アップロードしたファイルに「JANコード」という列が見つかりません。1行目の見出しを確認してください。")
+        
+        except Exception as e:
+            st.error(f"データの読み込み中にエラーが発生しました: {e}")
+else:
+    st.error("厚労省の最新データが見つかりませんでした。")
