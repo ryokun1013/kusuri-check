@@ -1,6 +1,5 @@
 pandas
 openpyxl
-streamlit
+streamlit>=1.35.0
 requests
 beautifulsoup4
-altair<5
