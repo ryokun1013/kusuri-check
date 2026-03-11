@@ -6,8 +6,8 @@ import re
 import unicodedata
 
 st.set_page_config(page_title="医薬品供給状況 自動照合システム", layout="wide")
-st.title("💊 医薬品供給状況 自動照合システム (最新版・全自動)")
-st.write("ファイルをアップロードすると、**厚労省の最新データ**を自動取得し、危険な順に並び替えて表示します。")
+st.title("💊 医薬品供給状況 自動照合システム (YJコード優先・高精度版)")
+st.write("ファイルをアップロードすると、**一番バグの少ない「薬剤コード(YJコード)」を最優先**して厚労省の最新データと自動照合し、危険な順に並び替えます。")
 
 # 1. 厚労省のサイトから最新ExcelのURLを自動で探す
 @st.cache_data(ttl=3600)
@@ -41,19 +41,22 @@ def load_mhlw_data(url):
     df.columns = [unicodedata.normalize('NFKC', str(c)).replace('\n', '').replace(' ', '').replace('　', '').strip() for c in df.columns]
     return df
 
-# 3. 超・融通の利く「自動列探し」関数
+# 3. 【大進化】薬剤コード(YJコード)を最優先で探す関数
 def get_best_match_keys(u_cols, m_cols):
     u_str = [str(c) for c in u_cols]
     m_str = [str(c) for c in m_cols]
 
+    # 第1優先：薬剤コード / 薬価コード (YJコード)
+    u_yj = next((c for c in u_str if '薬剤コード' in c or '薬価' in c or 'YJ' in c.upper()), None)
+    m_yj = next((c for c in m_str if '薬価' in c or '医薬品コード' in c or 'YJ' in c.upper() or ('コード' in c and 'JAN' not in c.upper())), None)
+    if u_yj and m_yj: return u_yj, m_yj, "薬剤コード (YJコード)"
+
+    # 第2優先：JANコード / 商品コード
     u_jan = next((c for c in u_str if '商品コード' in c or 'JAN' in c.upper()), None)
     m_jan = next((c for c in m_str if 'JAN' in c.upper() or '商品コード' in c), None)
     if u_jan and m_jan: return u_jan, m_jan, "商品コード (JAN)"
 
-    u_yj = next((c for c in u_str if '薬剤コード' in c or '薬価' in c or 'YJ' in c.upper()), None)
-    m_yj = next((c for c in m_str if '薬価' in c or '医薬品コード' in c or 'YJ' in c.upper() or 'コード' in c), None)
-    if u_yj and m_yj and m_yj != m_jan: return u_yj, m_yj, "薬剤コード"
-
+    # 第3優先：名称
     u_name = next((c for c in u_str if '薬剤名称' in c or '薬品名' in c or '商品名' in c or '販売名' in c or '名称' in c), None)
     m_name = next((c for c in m_str if '販売名' in c or '品名' in c or '名称' in c or '医薬品名' in c), None)
     if u_name and m_name: return u_name, m_name, "薬剤名称"
@@ -87,7 +90,7 @@ if latest_url:
                 u_key, m_key, reason = get_best_match_keys(user_df.columns, mhlw_df.columns)
                 
                 if u_key and m_key:
-                    st.info(f"💡 今回は **【{reason}】** を使って照合しました！")
+                    st.info(f"💡 今回は一番正確な **【{reason}】** を使って照合しました！")
                     
                     user_df['検索用'] = user_df[u_key].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                     mhlw_df['照合用'] = mhlw_df[m_key].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
@@ -116,27 +119,20 @@ if latest_url:
                         res['sort_score'] = res[col_status].apply(get_sort_score)
                         res = res.sort_values(by='sort_score').drop(columns=['sort_score']).reset_index(drop=True)
                     
-                    # --- 【大進化】列の順番を「見やすい神配列」にする ---
+                    # --- 列の順番を「見やすい神配列」にする ---
                     front_cols = []
                     
-                    # 1列目：供給状況（厚労省）
                     if col_status in res.columns: front_cols.append(col_status)
                     
-                    # 2列目：薬剤名称（あなたのCSVから）
                     u_name_col = next((c for c in user_df.columns if '名称' in c or '品名' in c), None)
                     if u_name_col in res.columns: front_cols.append(u_name_col)
                     
-                    # 3列目：商品コード（あなたのCSVから）
                     u_code_col = next((c for c in user_df.columns if 'コード' in c), None)
                     if u_code_col in res.columns and u_code_col not in front_cols: front_cols.append(u_code_col)
                     
-                    # 4列目：解消見込み時期（厚労省：ご要望の列！）
                     if col_resolve in res.columns: front_cols.append(col_resolve)
-                    
-                    # 5列目：改善見込み時期（厚労省）
                     if col_improve in res.columns: front_cols.append(col_improve)
                             
-                    # 残りの列をその後ろに並べる
                     other_cols = [c for c in res.columns if c not in front_cols]
                     res = res[front_cols + other_cols]
                     
