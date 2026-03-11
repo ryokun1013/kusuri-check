@@ -15,6 +15,7 @@ def get_latest_mhlw_url():
     url_page = "https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/kenkou_iryou/iryou/kouhatu-iyaku/04_00003.html"
     res = requests.get(url_page)
     soup = BeautifulSoup(res.text, 'html.parser')
+    # .xlsxで終わるリンクを探す
     links = soup.find_all('a', href=re.compile(r'.*\.xlsx$'))
     if links:
         path = links[0].get('href')
@@ -25,33 +26,32 @@ def get_latest_mhlw_url():
 latest_url = get_latest_mhlw_url()
 
 if latest_url:
+    st.info("✅ 厚労省の最新データを自動で準備しました！下の枠に在庫エクセルを入れてください。")
+    
     # ユーザーが在庫ファイルをアップロード
     uploaded_file = st.file_uploader("自分の在庫エクセル（Excel）を選んでください", type=["xlsx"])
 
     if uploaded_file:
-        # 厚労省データの読み込み
-        mhlw_df = pd.read_excel(latest_url, sheet_name='全品目', header=2)
-        mhlw_df['JANコード'] = mhlw_df['JANコード'].astype(str)
+        try:
+            # 【修正ポイント】シートの名前ではなく「一番左のシート(0)」を強制的に開く
+            mhlw_df = pd.read_excel(latest_url, sheet_name=0, header=2)
+            
+            # JANコードを文字に揃える（数字のズレによるエラー防止）
+            if 'JANコード' in mhlw_df.columns:
+                mhlw_df['JANコード'] = mhlw_df['JANコード'].astype(str).str.replace('.0', '', regex=False)
+            
+            # 自分の在庫データの読み込み
+            user_df = pd.read_excel(uploaded_file)
+            
+            # あなたのExcelに「JANコード」列があるかチェック
+            if 'JANコード' in user_df.columns:
+                user_df['JANコード'] = user_df['JANコード'].astype(str).str.replace('.0', '', regex=False)
 
-        # 自分の在庫データの読み込み
-        user_df = pd.read_excel(uploaded_file)
-        user_df['JANコード'] = user_df['JANコード'].astype(str)
+                # 厚労省データから持ってくる列（もし厚労省が列を消していてもエラーにならないようにする）
+                target_cols = ['JANコード', '供給状況', '出荷再開予定時期', '備考']
+                available_cols = [c for c in target_cols if c in mhlw_df.columns]
+                
+                # 合体（VLOOKUP）
+                res = pd.merge(user_df, mhlw_df[available_cols], on='JANコード', how='left')
 
-        # 合体（VLOOKUPのようにJANコードで繋ぐ）
-        res = pd.merge(user_df, mhlw_df[['JANコード', '供給状況', '出荷再開予定時期', '備考']], on='JANコード', how='left')
-
-        # 色塗りのルール
-        def color_rule(row):
-            status = str(row['供給状況'])
-            if '供給停止' in status: return ['background-color: #ffadad'] * len(row) # 赤
-            if '限定出荷' in status or '出荷調整' in status: return ['background-color: #ffd6a5'] * len(row) # 黄
-            return [''] * len(row)
-
-        # 結果表示
-        st.subheader("📊 照合完了！結果を確認してください")
-        st.dataframe(res.style.apply(color_rule, axis=1), height=500)
-        
-        # ダウンロード
-        st.download_button("結果を保存する", data=res.to_csv(index=False).encode('utf_8_sig'), file_name="check_result.csv")
-else:
-    st.error("厚労省の最新データが見つかりませんでした。")
+                # 色塗
